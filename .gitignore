@@ -1,0 +1,6 @@
+node_modules/
+*.log
+
+# dist 는 **커밋한다.** git 의존성으로 설치할 때 빌드가 돌지 않아야
+# VPS 가 devDependencies(typescript)를 받지 않는다. 자세한 이유는 README.
+# (그래서 여기에 dist/ 를 적지 않는다 — 실수로 추가하지 말 것)
