@@ -10,10 +10,14 @@
   "_runtime_note": "컴파일한 .js 를 내보낸다. raw .ts 를 내보내려 했지만 Node 는 node_modules 안의 타입 스트리핑을 의도적으로 거부한다(ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING) — 실측으로 확인했다. 소비 프로젝트는 빌드 단계가 없고 bare node 와 tsx 가 섞여 있으므로, 빌드는 이 라이브러리 안에서만 끝낸다. dist 는 저장소에 커밋한다: git 의존성으로 쓸 때 설치 시점에 빌드가 돌지 않아야 VPS 에서 devDependencies 를 받지 않는다.",
   "exports": {
     "./process": {
-      "types": "./dist/index.d.ts",
-      "default": "./dist/index.js"
+      "types": "./dist/process/index.d.ts",
+      "default": "./dist/process/index.js"
     },
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./worker": {
+      "types": "./dist/worker/index.d.ts",
+      "default": "./dist/worker/index.js"
+    }
   },
   "files": [
     "dist",
