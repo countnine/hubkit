@@ -57,8 +57,16 @@ git 의존성으로 쓸 때 설치 시점에 빌드가 돌지 않아야 VPS 가 
 ## 쓰기
 
 ```json
-{ "dependencies": { "hubkit": "github:countnine/hubkit#v0.1.0" } }
+{ "dependencies": {
+    "hubkit": "https://github.com/countnine/hubkit/archive/refs/tags/v0.1.0.tar.gz"
+} }
 ```
+
+**왜 `github:` 단축형이 아니라 tarball URL 인가.** npm 은 `github:owner/repo` 와
+`git+https://github.com/...` 를 **둘 다 lockfile 에 `git+ssh://git@github.com/...` 로
+정규화한다.** 그러면 설치하는 쪽마다 GitHub SSH 키가 있어야 하고, 없는 기기에서
+`npm ci` 가 깨진다 — 공개 저장소로 만든 이유(어디서도 자격증명이 필요 없게)가
+사라진다. tarball URL 은 lockfile 에 그대로 남고 git 조차 필요 없다.
 
 ## 개발
 
