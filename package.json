@@ -1,6 +1,6 @@
 {
   "name": "hubkit",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "허브/워커 구조 공용 뼈대 — 작업 큐·리스·워커 신원",
   "type": "module",
   "license": "MIT",

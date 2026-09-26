@@ -26,7 +26,7 @@
 #   1) 기록의 root 가 이 프로젝트인가
 #   2) 그 PID 가 살아 있는가
 #   3) 그 PID 의 **시작 시각이 기록과 같은가** — PID 는 재사용된다
-#   4) 명령줄에 이 프로젝트 경로가 있는가 (이중 확인)
+#   4) node / wscript 인가 (형태 확인)
 #
 # 왜 서비스도 작업 스케줄러도 아닌가 ────────────────────────────────────
 # 워커는 크롬을 연다. 윈도우 서비스는 세션 0 에서 돌아 **데스크톱이 없고**, 거기서는
@@ -65,6 +65,11 @@ $StopFlag = Join-Path $DataDir 'worker.stop'
 $Runner   = Join-Path $ProjectRoot 'scripts\worker.cmd'
 $Vbs      = Join-Path $ProjectRoot 'scripts\worker.vbs'
 $WScript  = Join-Path (Join-Path $env:SystemRoot 'System32') 'wscript.exe'
+
+# 이 창이 도는 세션. 다른 세션의 프로세스는 건드릴 수 없어서, 종료 실패의 원인을
+# 설명할 때 쓴다. 세션 0(Services)은 **데스크톱이 없다** — 거기서 띄운 워커는
+# 로그인 창을 보여 줄 수 없다.
+$MySession = (Get-Process -Id $PID).SessionId
 
 # 시작 시각 비교 허용 오차. node 의 process.uptime() 기준 계산과 윈도우가 보고하는
 # 프로세스 생성 시각은 런타임이 뜨는 만큼 차이가 난다.
@@ -215,6 +220,18 @@ function Start-Worker {
     return
   }
 
+  # 세션 0 에서 띄우면 데스크톱이 없다. 폴링과 적립은 돌아가지만, 사람이 봐야 하는
+  # 로그인 창(openLogin)은 보이지 않는다 — 그리고 그 워커는 사용자의 평소 창에서
+  # 멈출 수도 없다(세션이 달라 접근 거부). 막지는 않되 반드시 말해 준다.
+  if ($MySession -eq 0) {
+    Write-Warning @"
+지금 이 창은 세션 0(Services)입니다. 여기서 띄운 워커는 데스크톱이 없어
+  · 로그인 창이 화면에 보이지 않고
+  · 사용자의 평소 터미널에서 -Stop 이 '액세스 거부' 로 실패합니다.
+평소 쓰는 로그온 세션에서 실행하는 편이 좋습니다.
+"@
+  }
+
   Write-Launchers
   if (Test-Path $StopFlag) { Remove-Item -Force $StopFlag }
 
@@ -250,6 +267,7 @@ function Stop-Worker {
   Set-Content -Path $StopFlag -Value 'stop' -Encoding ASCII
 
   $killed = 0
+  $failed = 0
   foreach ($file in @($KeeperPidFile, $PidFile)) {
     $target = Resolve-Recorded $file
     if (-not $target) {
@@ -259,11 +277,39 @@ function Stop-Worker {
       }
       continue
     }
-    Write-Host "  종료: PID $($target.Id.pid) ($($target.Process.Name))"
-    Stop-Process -Id $target.Id.pid -Force -ErrorAction SilentlyContinue
-    $killed += 1
+    # 오류를 삼키지 않는다.
+    #
+    # 예전에는 `-ErrorAction SilentlyContinue` 였다. 그래서 종료가 **실패해도**
+    # "중지했습니다" 를 찍었고, 워커는 계속 돌았다. -Restart 는 그 뒤 "이미 돌고
+    # 있습니다" 로 끝나 아무것도 갱신되지 않았는데, 사람이 보는 것은 성공 메시지
+    # 두 줄뿐이었다. 조작자에게 거짓말하는 종류의 침묵이라 반드시 드러내야 한다.
+    try {
+      Stop-Process -Id $target.Id.pid -Force -ErrorAction Stop
+      Write-Host "  종료: PID $($target.Id.pid) ($($target.Process.Name))"
+      $killed += 1
+    } catch {
+      $failed += 1
+      Write-Host "  실패: PID $($target.Id.pid) ($($target.Process.Name)) 를 종료할 수 없습니다 — $($_.Exception.Message)"
+
+      # 가장 흔한 원인은 **세션이 다른 것**이다. 다른 세션(특히 세션 0)에서 뜬
+      # 프로세스는 이쪽 권한으로 건드릴 수 없고, 소유자·명령줄도 읽히지 않는다.
+      $sess = (Get-Process -Id $target.Id.pid -ErrorAction SilentlyContinue).SessionId
+      if ($null -ne $sess -and $sess -ne $MySession) {
+        Write-Host "         그 프로세스는 세션 $sess 에서 돌고 있습니다 (지금 이 창은 세션 $MySession)."
+        Write-Host '         그 세션에서 띄운 것이므로 같은 자리에서 멈춰야 합니다.'
+      }
+    }
   }
-  if ($killed -eq 0) { Write-Host '돌고 있는 워커가 없습니다.' } else { Write-Host '중지했습니다.' }
+
+  if ($failed -gt 0) {
+    Write-Host ''
+    Write-Host "중지하지 못했습니다 ($failed 건). 워커가 아직 돌고 있습니다."
+    Write-Host '중지 표시는 남겨 두었으므로, 그 워커가 죽으면 감시 스크립트가 되살리지는 않습니다.'
+  } elseif ($killed -eq 0) {
+    Write-Host '돌고 있는 워커가 없습니다.'
+  } else {
+    Write-Host '중지했습니다.'
+  }
 }
 
 function Install-Startup {
