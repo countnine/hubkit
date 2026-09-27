@@ -10,9 +10,13 @@ export {
   HubUnreachable,
   type HubClientOptions,
   type ProgressPatch,
+  type TaskReport,
+  type TaskStatus,
 } from './client.ts';
 export {
   runWorkerLoop,
+  type SettleDecision,
+  type SettleInput,
   type WorkerContext,
   type WorkerLoopOptions,
 } from './loop.ts';
