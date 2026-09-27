@@ -88,6 +88,58 @@ settle: (o) => {
 `settle` 이 던지면 기본 판정으로 되돌려 보고한다 — 판정 하나 잘못 쓴 것이 작업을
 리스 만료까지 붙잡는 일로 번지지 않게.
 
+### `hubkit/hub` — 워커의 말을 받는 창구
+
+허브 쪽 라우터. 토큰 검사, 롱폴링, 진행 보고, 끝맺음이 여기 있다. **저장은 `ports` 로
+넘긴다** — 테이블 모양은 프로젝트마다 다르고, 이 모듈이 그것을 알면 프로젝트가 늘
+때마다 자란다.
+
+```ts
+import express from 'express';
+import { workerRouter } from 'hubkit/hub';
+
+app.use(
+  `${basePath}/api/worker`,
+  workerRouter({
+    token: () => WORKER_TOKEN,          // 함수로 주면 요청마다 다시 읽는다
+    tokenMissingMessage: 'NPAY_WORKER_TOKEN 이 설정되지 않아 워커를 받지 않습니다.',
+    jsonBody: express.json({ limit: '256kb' }),
+    ports: {
+      seen: markWorkerSeen,
+      capabilities: recordMachineProfiles,
+      claim: ({ machine, capabilities, kinds }) => claimTask({ machine, profiles: capabilities, kinds }),
+      progress: (id, patch) => appendProgress(id, patch),
+      finish: (id, report) => finishTask(id, report),
+    },
+    extend: (router) => {               // 프로젝트 고유 라우트
+      router.post('/attempt/:id', jsonBody, handleAttempt);
+    },
+  }),
+);
+```
+
+express 는 **peerDependency** 다. 소비 프로젝트가 이미 자기 express 를 들고 있고,
+여기서 한 벌 더 가져오면 라우터가 다른 express 의 것이 되어 미들웨어가 어긋난다.
+
+#### 본문 파서는 라우트마다 붙인다
+
+`jsonBody` 를 옵션으로 받는 이유다. `router.use(express.json())` 로 한 번에 붙이면
+**Content-Type 이 application/json 인 모든 요청**을 그 파서가 집어삼킨다 —
+PreviewAuto 는 수집 배치를 바이트 그대로 받아야 하는데(멱등성 판정이 본문 해시다)
+그러면 413 으로 거절되거나 해시가 달라진다.
+
+#### `res.on('close')` — `req` 가 아니다
+
+롱폴링이 클라이언트 끊김을 볼 때 **`res`** 를 본다. express 5 에서 `req.on('close')` 는
+**본문을 다 읽은 직후** 발화한다. 클라이언트가 멀쩡히 기다리고 있어도 그렇다.
+
+세 프로젝트가 전부 `req` 를 보고 있었고, 그래서 **롱폴링이 실제로는 없었다** —
+25초를 붙잡을 자리에서 즉시 204 를 돌려줬다. 실측(express 5.2.1): `req` 는 134ms,
+`res` 는 1571ms(기대 1500ms). 끊김은 `res` 가 300ms 에 끊으면 310ms 에 잡는다.
+
+조용했던 이유는 **204 가 정상 응답**이라는 것이다. 아무 데도 오류로 남지 않고, 워커는
+그냥 더 자주 물어봤다. npayEvent 워커는 `idleMs` 가 0 이라 쉬지 않고 물었다.
+
 ## 런타임
 
 컴파일한 `.js` + `.d.ts` 를 내보낸다. raw `.ts` 를 내보내려 했지만 Node 는
