@@ -142,6 +142,22 @@ export class HubClient {
   }
 
   /**
+   * 메서드를 직접 고르는 통로. PUT / PATCH / DELETE 가 필요한 프로젝트가 쓴다.
+   *
+   * PreviewAuto 는 판독 결과와 수집 배치를 **PUT** 으로 올린다 — 같은 작업의 같은
+   * 순번을 다시 보내도 결과가 같아야 하는 자리라 그것이 맞는 메서드다. post/get
+   * 만 열어 두면 그런 프로젝트는 재시도 사다리를 직접 한 벌 더 만들게 된다.
+   */
+  async request(
+    method: string,
+    path: string,
+    body?: unknown,
+    timeoutMs?: number,
+  ): Promise<Response> {
+    return this.send(method, path, body, timeoutMs);
+  }
+
+  /**
    * 바이트 그대로 올린다 (스크린샷·이미지 같은 것).
    *
    * 재시도하지 않는다. 몇 MB 를 네 번 다시 보내는 값이 크고, 이런 업로드는 실패해도
