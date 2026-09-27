@@ -41,6 +41,53 @@ Where-Object { $_.CommandLine -like '*src/index.ts worker*' }
 3번이 이 패키지의 존재 이유다. "살아 있다" 만 보고 죽이면 그 번호를 물려받은
 남의 프로세스를 죽인다.
 
+### `hubkit/worker` — 묻고, 하고, 보고하는 루프
+
+프로젝트가 채우는 것은 **`handle` 하나**다. 신원 등록, 로그 버퍼링, 하트비트,
+취소 수신, 결과 보고, 종료 신호는 이쪽이 맡는다 — 그 여섯 가지가 프로젝트마다
+한 벌씩 있었고, 조금씩 달랐다.
+
+```ts
+import { HubClient, runWorkerLoop } from 'hubkit/worker';
+
+await runWorkerLoop({
+  hub: new HubClient({ hubUrl: HUB_URL, token: WORKER_TOKEN, machine }),
+  kinds: ['run', 'check', 'login'],
+  // 폴링할 때마다 다시 읽는다 — 워커를 재시작하지 않고 로그인을 추가하는 일이 흔하다
+  capabilities: localProfileNames,
+  identity: { dir: DATA_DIR, project: 'npayEvent', root: ROOT },
+  handle: async (plan, ctx) => doRun(plan, ctx),
+});
+```
+
+**보고는 루프가 반드시 한다.** `handle` 이 던져도 실패로 보고된다 — 이것을
+프로젝트에 맡기면 예외 경로에서 빠뜨리기 쉽고, 그러면 허브에 '실행 중' 인 작업이
+리스 만료까지 남는다.
+
+#### `settle` — 상태 어휘는 프로젝트가 정한다
+
+기본은 `done` / `failed` / `canceled` 지만 그 셋으로 끝나지 않는다. autoapply 는
+**`deferred`**(아직 응모하지 않았으니 큐에 남겨 둬라)가 필요하고, 그 허브는
+`canceled` 를 모른다. 프레임워크가 어휘를 고정하면 그런 프로젝트는 이 통로를 쓸 수 없다.
+
+```ts
+settle: (o) => {
+  if (!o.ok && o.error instanceof BlockedError) {
+    // 실패로 보고하면 큐로 되돌아가 같은 차단을 다시 밟는다.
+    return { report: null, pauseMs: 15_000 };
+  }
+  const r = o.result as ExecOutcome;
+  return { report: { status: r.status, error: r.error } };
+},
+```
+
+`report: null` 은 **일부러 보고하지 않는다**는 뜻이다. 작업은 허브에서 '실행 중' 으로
+남고 리스가 만료될 때 그 프로젝트의 회수 규칙이 판단한다.
+
+`settle` 은 **형태만 정하는 순수 함수**다. 보고하는 책임은 루프가 계속 들고 있고,
+`settle` 이 던지면 기본 판정으로 되돌려 보고한다 — 판정 하나 잘못 쓴 것이 작업을
+리스 만료까지 붙잡는 일로 번지지 않게.
+
 ## 런타임
 
 컴파일한 `.js` + `.d.ts` 를 내보낸다. raw `.ts` 를 내보내려 했지만 Node 는

@@ -55,6 +55,24 @@ export interface HubClientOptions {
   pollTimeoutMs?: number;
 }
 
+/**
+ * 작업이 어떻게 끝났는지.
+ *
+ * 세 값은 어느 프로젝트에나 있다. **그런데 그 셋으로 끝나지 않는다** — autoapply 는
+ * 'deferred'(아직 응모하지 않았으니 큐에 남겨 둬라)를 쓰고, 그 허브는 'canceled' 를
+ * 모른다. 프레임워크가 어휘를 고정하면 그런 프로젝트는 이 통로를 쓸 수 없다.
+ *
+ * 그래서 아는 값은 자동완성으로 돕고, 모르는 값도 막지 않는다. 무엇이 유효한지는
+ * **각 허브의 라우트**가 정한다 — 거기가 원천이고, 여기는 전달만 한다.
+ */
+export type TaskStatus = 'done' | 'failed' | 'canceled' | (string & {});
+
+export interface TaskReport {
+  status: TaskStatus;
+  error?: string;
+  result?: unknown;
+}
+
 export interface ProgressPatch {
   log?: string[];
   progress?: unknown;
@@ -105,10 +123,7 @@ export class HubClient {
     return (await res.json().catch(() => ({ cancel: false }))) as { cancel: boolean };
   }
 
-  async result(
-    taskId: number,
-    report: { status: 'done' | 'failed' | 'canceled'; error?: string; result?: unknown },
-  ): Promise<void> {
+  async result(taskId: number, report: TaskReport): Promise<void> {
     await this.send('POST', `/api/worker/result/${taskId}`, report);
   }
 

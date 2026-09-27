@@ -237,3 +237,73 @@ test('capabilities 는 폴링할 때마다 다시 읽는다', async () => {
 
   assert.ok(reads >= 3, `폴링마다 읽어야 한다 (읽기 ${reads}회 / 폴링 ${polls}회)`);
 });
+
+/* ───────────── settle — 상태 어휘는 프로젝트가 정한다 ───────────── */
+
+test("settle 이 프로젝트의 상태값으로 바꾼다 — 'deferred' 처럼", async () => {
+  let reported: any;
+  hubWithOneTask((b) => {
+    reported = b;
+  });
+
+  await runWorkerLoop({
+    hub: new HubClient({ hubUrl: 'http://hub', token: 't', machine: 'm' }),
+    kinds: ['enter'],
+    capabilities: () => ['p1'],
+    handle: async () => ({ status: 'deferred', error: '[dryrun] 실제 동작을 하지 않았습니다.' }),
+    settle: (o) => {
+      const r = o.result as { status: string; error?: string };
+      return { report: { status: r.status, error: r.error } };
+    },
+    log: () => {},
+  });
+
+  assert.equal(reported.status, 'deferred');
+  assert.match(reported.error, /dryrun/);
+});
+
+test('report 가 null 이면 아무것도 보고하지 않는다 — 차단은 큐로 되돌리면 안 된다', async () => {
+  let resultCalls = 0;
+  hubWithOneTask(() => {
+    resultCalls += 1;
+  });
+
+  const said: string[] = [];
+  await runWorkerLoop({
+    hub: new HubClient({ hubUrl: 'http://hub', token: 't', machine: 'm' }),
+    kinds: ['enter'],
+    capabilities: () => ['p1'],
+    handle: async () => {
+      throw new Error('차단이 감지됐습니다');
+    },
+    settle: (o) => (o.error?.message.includes('차단') ? { report: null } : { report: { status: 'failed' } }),
+    log: (m) => said.push(m),
+  });
+
+  assert.equal(resultCalls, 0, '차단인데 결과를 보고했다');
+  // 조용히 넘어가면 나중에 이유를 찾을 수 없다 — 로그에는 남아야 한다.
+  assert.ok(
+    said.some((l) => l.includes('보고하지 않습니다')),
+    '보고하지 않은 사실이 로그에 없다',
+  );
+});
+
+test('settle 이 던져도 기본값으로는 보고한다 — 판정 실수가 작업을 붙잡아선 안 된다', async () => {
+  let reported: any;
+  hubWithOneTask((b) => {
+    reported = b;
+  });
+
+  await runWorkerLoop({
+    hub: new HubClient({ hubUrl: 'http://hub', token: 't', machine: 'm' }),
+    kinds: ['enter'],
+    capabilities: () => ['p1'],
+    handle: async () => ({ ok: 1 }),
+    settle: () => {
+      throw new Error('판정 코드가 틀렸다');
+    },
+    log: () => {},
+  });
+
+  assert.equal(reported.status, 'done', 'settle 이 던졌는데 보고가 사라졌다');
+});

@@ -10,6 +10,12 @@
  */
 import * as identity from "../process/identity.js";
 import { HubClient, HubUnreachable } from "./client.js";
+/** 아는 것이 없으면 이렇게 본다: 끝났으면 done, 던졌으면 failed, 중지됐으면 canceled. */
+function defaultSettle(o) {
+    if (!o.ok)
+        return { report: { status: 'failed', error: o.error?.message ?? String(o.error) } };
+    return { report: { status: o.canceled ? 'canceled' : 'done', result: o.result } };
+}
 /**
  * 로그를 모아 주기적으로 허브에 밀어 넣고, 돌아오는 취소 신호를 들고 있는다.
  *
@@ -144,26 +150,43 @@ async function runOne(plan, opts, flushMs, log, stopping) {
         log: pump.log,
         shouldStop: () => pump.canceledByHub() || stopping(),
     };
+    let outcome;
     try {
         const result = await opts.handle(plan, ctx);
         await pump.stop();
-        await opts.hub.result(plan.taskId, {
-            status: ctx.shouldStop() ? 'canceled' : 'done',
-            result,
-        });
+        outcome = { ok: true, result, canceled: ctx.shouldStop() };
     }
     catch (err) {
         const message = err.message;
         pump.log(`중단: ${message}`);
         await pump.stop();
+        outcome = { ok: false, error: err, canceled: ctx.shouldStop() };
+    }
+    // settle 이 던지면 **보고가 사라진다.** 판정 하나 잘못 쓴 것이 작업을 리스 만료까지
+    // 붙잡는 일로 번지지 않게, 기본 판정으로 되돌린다.
+    let decision;
+    try {
+        decision = (opts.settle ?? defaultSettle)(outcome);
+    }
+    catch (err) {
+        log(`결과 판정(settle)이 실패해 기본값으로 보고합니다: ${err.message}`);
+        decision = defaultSettle(outcome);
+    }
+    if (decision.report) {
         try {
-            await opts.hub.result(plan.taskId, { status: 'failed', error: message });
+            await opts.hub.result(plan.taskId, decision.report);
         }
         catch {
             // 보고조차 못 했다. 허브의 리스가 만료되면 회수되므로 다음 작업으로 넘어간다.
             log(`결과를 보고하지 못했습니다 (작업 ${plan.taskId}). 리스 만료로 회수됩니다.`);
         }
     }
+    else {
+        // 일부러 보고하지 않는 경우다. 조용히 넘어가면 나중에 로그로 이유를 찾을 수 없다.
+        log(`작업 ${plan.taskId} 은 결과를 보고하지 않습니다 — 허브의 리스 만료 처리에 맡깁니다.`);
+    }
+    if (decision.pauseMs && decision.pauseMs > 0)
+        await sleep(decision.pauseMs);
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 //# sourceMappingURL=loop.js.map

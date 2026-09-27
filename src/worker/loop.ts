@@ -9,7 +9,7 @@
  * 프로젝트마다 한 벌씩 있었고, 조금씩 달랐다.
  */
 import * as identity from '../process/identity.ts';
-import { HubClient, HubUnreachable } from './client.ts';
+import { HubClient, HubUnreachable, type TaskReport } from './client.ts';
 
 export interface WorkerContext {
   hub: HubClient;
@@ -18,6 +18,38 @@ export interface WorkerContext {
   log(message: string): void;
   /** 화면에서 [중지] 를 눌렀거나 종료 신호를 받았다. 진행 중인 것만 마치고 멈춰야 한다. */
   shouldStop(): boolean;
+}
+
+/** 핸들러가 어떻게 끝났는지. `settle` 이 이것을 보고 보고 형태를 정한다. */
+export interface SettleInput {
+  /** 핸들러가 정상으로 끝났는가. */
+  ok: boolean;
+  /** ok 일 때 핸들러가 돌려준 값. */
+  result?: unknown;
+  /** ok 가 아닐 때 던져진 오류. */
+  error?: Error;
+  /** 화면에서 [중지] 를 눌렀거나 종료 신호를 받았다. */
+  canceled: boolean;
+}
+
+export interface SettleDecision {
+  /**
+   * 허브에 보낼 보고.
+   *
+   * **null 이면 보고하지 않는다.** 작업은 허브에서 '실행 중' 으로 남고, 리스가
+   * 만료될 때 그 프로젝트의 회수 규칙이 판단한다. 차단을 감지해 멈춘 경우처럼
+   * "여기서 결론을 내리면 안 되는" 실패에 쓴다 — 실패로 보고해 버리면 큐로
+   * 되돌아가 같은 차단을 다시 밟는다.
+   */
+  report: TaskReport | null;
+  /** 보고한 뒤 쉬는 시간. 차단이나 연속 실패 뒤에 몰아치지 않으려고 둔다. */
+  pauseMs?: number;
+}
+
+/** 아는 것이 없으면 이렇게 본다: 끝났으면 done, 던졌으면 failed, 중지됐으면 canceled. */
+function defaultSettle(o: SettleInput): SettleDecision {
+  if (!o.ok) return { report: { status: 'failed', error: o.error?.message ?? String(o.error) } };
+  return { report: { status: o.canceled ? 'canceled' : 'done', result: o.result } };
 }
 
 export interface WorkerLoopOptions<Plan extends { taskId: number }> {
@@ -38,6 +70,15 @@ export interface WorkerLoopOptions<Plan extends { taskId: number }> {
   capabilities: () => string[] | Promise<string[]>;
   /** 실제로 일하는 자리. 반환값이 결과로 보고되고, 던지면 실패로 보고된다. */
   handle: (plan: Plan, ctx: WorkerContext) => Promise<unknown>;
+  /**
+   * 끝난 결과를 **무엇으로 보고할지** 정한다. 기본은 done/failed/canceled.
+   *
+   * 상태 어휘가 프로젝트마다 다르기 때문에 있다 — autoapply 는 'deferred' 가 필요하고
+   * 그 허브는 'canceled' 를 모른다. 그래도 **보고하는 책임은 루프가 계속 들고 있다**:
+   * 여기는 형태만 정하는 순수 함수다. 프로젝트가 직접 보고하게 두면 예외 경로에서
+   * 빠뜨리기 쉽고, 그러면 허브에 '실행 중' 인 작업이 리스 만료까지 남는다.
+   */
+  settle?: (outcome: SettleInput) => SettleDecision;
   /** 신원 파일을 둘 곳. 주면 단일 인스턴스가 보장된다. */
   identity?: { dir: string; project: string; root: string };
   /** 루프 자체의 말. 기본은 콘솔. */
@@ -203,24 +244,41 @@ async function runOne<Plan extends { taskId: number }>(
     shouldStop: () => pump.canceledByHub() || stopping(),
   };
 
+  let outcome: SettleInput;
   try {
     const result = await opts.handle(plan, ctx);
     await pump.stop();
-    await opts.hub.result(plan.taskId, {
-      status: ctx.shouldStop() ? 'canceled' : 'done',
-      result,
-    });
+    outcome = { ok: true, result, canceled: ctx.shouldStop() };
   } catch (err) {
     const message = (err as Error).message;
     pump.log(`중단: ${message}`);
     await pump.stop();
+    outcome = { ok: false, error: err as Error, canceled: ctx.shouldStop() };
+  }
+
+  // settle 이 던지면 **보고가 사라진다.** 판정 하나 잘못 쓴 것이 작업을 리스 만료까지
+  // 붙잡는 일로 번지지 않게, 기본 판정으로 되돌린다.
+  let decision: SettleDecision;
+  try {
+    decision = (opts.settle ?? defaultSettle)(outcome);
+  } catch (err) {
+    log(`결과 판정(settle)이 실패해 기본값으로 보고합니다: ${(err as Error).message}`);
+    decision = defaultSettle(outcome);
+  }
+
+  if (decision.report) {
     try {
-      await opts.hub.result(plan.taskId, { status: 'failed', error: message });
+      await opts.hub.result(plan.taskId, decision.report);
     } catch {
       // 보고조차 못 했다. 허브의 리스가 만료되면 회수되므로 다음 작업으로 넘어간다.
       log(`결과를 보고하지 못했습니다 (작업 ${plan.taskId}). 리스 만료로 회수됩니다.`);
     }
+  } else {
+    // 일부러 보고하지 않는 경우다. 조용히 넘어가면 나중에 로그로 이유를 찾을 수 없다.
+    log(`작업 ${plan.taskId} 은 결과를 보고하지 않습니다 — 허브의 리스 만료 처리에 맡깁니다.`);
   }
+
+  if (decision.pauseMs && decision.pauseMs > 0) await sleep(decision.pauseMs);
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
