@@ -342,3 +342,22 @@ test('워커가 연결을 끊으면 붙잡기를 그만둔다 — 죽은 연결�
     `끊긴 뒤에도 ${claimCalls - atAbort}번 더 집으려 했다 — res.on('close') 가 동작하지 않는다`,
   );
 });
+
+test('progress·finish 는 보고한 기기 이름을 함께 받는다 — 남의 작업을 막는 검사에 쓴다', async () => {
+  const seen: unknown[] = [];
+  const h = await serve({
+    progress: (_id, _patch, ctx) => {
+      seen.push(['progress', ctx.machine]);
+      return { cancel: false };
+    },
+    finish: (_id, _r, ctx) => {
+      seen.push(['finish', ctx.machine]);
+    },
+  });
+  await post(h.base, '/api/worker/progress/1', { log: [] }, { 'X-Worker-Machine': 'pc-a' });
+  await post(h.base, '/api/worker/result/1', { status: 'done' }, { 'X-Worker-Machine': 'pc-b' });
+  assert.deepEqual(seen, [
+    ['progress', 'pc-a'],
+    ['finish', 'pc-b'],
+  ]);
+});

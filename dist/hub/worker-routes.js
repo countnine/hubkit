@@ -138,7 +138,7 @@ export function workerRouter(opts) {
     router.post(opts.progressPath ?? '/progress/:id', ...parse, (req, res) => {
         try {
             const { log, progress } = (req.body ?? {});
-            res.json(opts.ports.progress(taskIdOf(req), { log, progress }));
+            res.json(opts.ports.progress(taskIdOf(req), { log, progress }, { machine: machineOf(req) }));
         }
         catch (err) {
             onError(res, err);
@@ -154,11 +154,7 @@ export function workerRouter(opts) {
                 if (!opts.ports.finish) {
                     return res.status(500).json({ error: 'finish 포트가 없습니다.' });
                 }
-                opts.ports.finish(taskIdOf(req), {
-                    status: report.status,
-                    error: report.error,
-                    result: report.result,
-                });
+                opts.ports.finish(taskIdOf(req), { status: report.status, error: report.error, result: report.result }, { machine: machineOf(req) });
                 return res.json({ ok: true });
             }
             catch (err) {

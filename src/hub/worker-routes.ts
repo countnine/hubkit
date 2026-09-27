@@ -40,15 +40,24 @@ export interface WorkerRoutesPorts {
     capabilities: string[];
     kinds: string[] | undefined;
   }): unknown | undefined;
-  /** 하트비트 겸 로그. 리스를 갱신하고 취소 여부를 돌려준다. */
+  /**
+   * 하트비트 겸 로그. 리스를 갱신하고 취소 여부를 돌려준다.
+   *
+   * `ctx.machine` 을 주는 이유: 보고한 기기가 **그 작업의 주인인지** 확인하는
+   * 프로젝트가 있다(PreviewAuto 의 requireLiveTask). 남의 작업에 로그를 쓰거나
+   * 끝맺음을 보내는 것을 막는 검사라, 넘겨주지 않으면 그 프로젝트는 이 통로를
+   * 쓸 수 없다.
+   */
   progress(
     taskId: number,
     patch: { log?: string[]; progress?: unknown },
+    ctx: { machine: string },
   ): { cancel: boolean };
   /** 끝맺음. `resultPath: null` 로 공용 라우트를 끄면 필요 없다. */
   finish?(
     taskId: number,
     report: { status: string; error?: string; result?: unknown },
+    ctx: { machine: string },
   ): void;
 }
 
@@ -251,7 +260,9 @@ export function workerRouter(opts: WorkerRoutesOptions): Router {
     (req: Request, res: Response) => {
       try {
         const { log, progress } = (req.body ?? {}) as { log?: string[]; progress?: unknown };
-        res.json(opts.ports.progress(taskIdOf(req), { log, progress }));
+        res.json(
+          opts.ports.progress(taskIdOf(req), { log, progress }, { machine: machineOf(req) }),
+        );
       } catch (err) {
         onError(res, err);
       }
@@ -275,11 +286,11 @@ export function workerRouter(opts: WorkerRoutesOptions): Router {
           if (!opts.ports.finish) {
             return res.status(500).json({ error: 'finish 포트가 없습니다.' });
           }
-          opts.ports.finish(taskIdOf(req), {
-            status: report.status,
-            error: report.error,
-            result: report.result,
-          });
+          opts.ports.finish(
+            taskIdOf(req),
+            { status: report.status, error: report.error, result: report.result },
+            { machine: machineOf(req) },
+          );
           return res.json({ ok: true });
         } catch (err) {
           return onError(res, err) as unknown as Response;
